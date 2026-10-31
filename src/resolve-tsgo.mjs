@@ -52,7 +52,10 @@ export function installRuntime(dir = runtimeDir(), log = () => {}) {
     const npm = npmCommand();
     const args = [...npm.args, 'install', '--prefix', dir, '--no-audit', '--no-fund', '--omit=dev', '--no-package-lock', '--loglevel=error', `typescript@${TS_VERSION}`];
     log('installing', `typescript@${TS_VERSION}`, 'into', dir);
-    const r = spawnSync(npm.command, args, { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', shell: npm.shell, windowsHide: true });
+    // cwd = the install dir (trusted): the LSP server's own cwd is the user's project, which must not supply `npm`
+    const r = npm.shell
+      ? spawnSync(['npm', ...args].map(a => (/[\s"&|<>^%]/.test(a) ? `"${a}"` : a)).join(' '), { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', shell: true, windowsHide: true })
+      : spawnSync(npm.command, args, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', windowsHide: true });
     if (r.status !== 0) throw new Error(`npm install typescript@${TS_VERSION} failed (${r.status}): ${(r.stderr || r.stdout || r.error?.message || '').slice(0, 2000)}`);
     if (!nativeFrom(dir)) throw new Error(`typescript@${TS_VERSION} installed but ${platformPkg} is missing — is ${process.platform}-${process.arch} supported?`);
   } finally { fs.rmSync(lock, { force: true }); }

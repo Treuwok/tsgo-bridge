@@ -1,6 +1,7 @@
 // MCP (stdio, newline-delimited JSON-RPC) frontend for agents without an LSP client (Codex CLI).
 // Tools: ts_diagnostics, ts_hover, ts_definition, ts_references, ts_symbols.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -63,7 +64,19 @@ export function runMcpServer({ stdin = process.stdin, stdout = process.stdout, e
     return hit ?? gitRoot(path.dirname(file)) ?? (norm(file).startsWith(norm(cwd)) ? cwd : path.dirname(file));
   }
   function defaultRoot() { return roots[0] ?? gitRoot(cwd) ?? cwd; }
-  function absPath(p, base = defaultRoot()) { return path.resolve(base, p); }
+  const real = p => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
+  /** Workspaces the agent may read: client roots, else the cwd's git root (or cwd). */
+  function allowedRoots() { return (roots.length ? roots : [gitRoot(cwd) ?? cwd]).map(real); }
+  function inside(file, root) { const r = path.relative(root, file); return r === '' || (!r.startsWith('..') && !path.isAbsolute(r)); }
+  /** Resolve a tool-supplied path; only regular files inside an allowed workspace are accepted. */
+  function absPath(p, base = defaultRoot()) {
+    const resolved = path.resolve(base, p);
+    if (!fs.existsSync(resolved)) return resolved; // callers report "file not found"
+    const file = real(resolved);
+    if (!allowedRoots().some(r => inside(norm(file), norm(r)))) throw new Error(`refusing to read outside the workspace: ${p}`);
+    if (!fs.statSync(file).isFile()) throw new Error(`not a regular file: ${p}`);
+    return file;
+  }
   function rel(file, root) { const r = path.relative(root, file); return r && !r.startsWith('..') && !path.isAbsolute(r) ? r.split(path.sep).join('/') : file; }
 
   function workspace(root) {
@@ -113,13 +126,15 @@ export function runMcpServer({ stdin = process.stdin, stdout = process.stdout, e
       if (d && d.text !== text) w.mgr.changeDoc(uri, d.version + 1, [{ text }]);
     }
   }
+  // run git from a trusted cwd (Windows searches the cwd for executables first) and point it at the repo with -C
+  const git = (repo, args) => spawnSync('git', ['-C', repo, ...args], { cwd: os.homedir(), encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
   function changedFiles(root) {
-    const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: root, encoding: 'utf8', windowsHide: true });
+    const top = git(root, ['rev-parse', '--show-toplevel']);
     if (top.status !== 0) return [];
-    const base = top.stdout.trim();
+    const base = path.resolve(top.stdout.trim());
     const out = [];
     for (const args of [['diff', '--name-only', 'HEAD'], ['ls-files', '--others', '--exclude-standard']]) {
-      const r = spawnSync('git', args, { cwd: base, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+      const r = git(base, args);
       if (r.status === 0) out.push(...r.stdout.split('\n').map(s => s.trim()).filter(Boolean));
     }
     return [...new Set(out)].filter(f => TS_EXTENSIONS.some(e => f.toLowerCase().endsWith(e)) && !f.endsWith('.d.ts')).map(f => path.resolve(base, f)).filter(f => fs.existsSync(f)).slice(0, 100);

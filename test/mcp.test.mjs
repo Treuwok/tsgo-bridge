@@ -67,6 +67,15 @@ test('ts_diagnostics without files uses git changed files', { skip: spawnSync('g
   assert.match(out, /extra\.ts:1:14 error TS2322/);
 });
 
+test('files outside the workspace are refused', async () => {
+  const outside = path.join(path.dirname(dir), `tsgo-bridge-outside-${process.pid}.ts`);
+  fs.writeFileSync(outside, 'export const secret = 1;\n');
+  try {
+    assert.match(await c.call('ts_hover', { file: outside, line: 1 }), /refusing to read outside the workspace/);
+    assert.match(await c.call('ts_diagnostics', { files: [outside] }), /refusing to read outside the workspace/);
+  } finally { fs.rmSync(outside, { force: true }); }
+});
+
 test('unknown file and unknown symbol produce readable errors', async () => {
   const a = await c.call('ts_hover', { file: 'nope.ts', line: 1 });
   assert.match(a, /file not found/);

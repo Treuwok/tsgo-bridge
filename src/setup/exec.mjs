@@ -1,7 +1,10 @@
 // Run an agent CLI (claude / codex) portably: try without a shell first (finds .exe), fall back to a shell (.cmd shims).
 import { spawnSync } from 'node:child_process';
+import os from 'node:os';
 
-export function run(cmd, args, { env = process.env, cwd, input } = {}) {
+// Default cwd is the home directory: on Windows the cwd is searched for executables before PATH,
+// so never resolve `claude` / `codex` from an arbitrary (possibly untrusted) project directory.
+export function run(cmd, args, { env = process.env, cwd = os.homedir(), input } = {}) {
   const opts = { env, cwd, input, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 };
   let r = spawnSync(cmd, args, opts);
   if (r.error?.code === 'ENOENT' && process.platform === 'win32') {
