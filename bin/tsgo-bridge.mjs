@@ -12,6 +12,7 @@ function flags(argv) {
     else if (a === '--claude-only') o.claudeOnly = true;
     else if (a === '--codex-only') o.codexOnly = true;
     else if (a === '--json') o.json = true;
+    else if (a === '--disable-conflicting') o.disableConflicting = true;
     else if (a === '--home') o.home.push(argv[++i]);
     else if (a === '--source') o.source = argv[++i];
     else if (a === '--idle-minutes') o.idleMinutes = Number(argv[++i]);
@@ -32,6 +33,7 @@ const HELP = `tsgo-bridge — TypeScript 7 (tsgo) code intelligence for Claude C
 Usage:
   tsgo-bridge setup      [--dry-run] [-y] [--all-homes] [--home <dir>]... [--claude-only|--codex-only]
                          [--source <github-owner/repo | git url | local path>] [--idle-minutes <n>]
+                         [--disable-conflicting]  also disable multi-language LSP plugins that register .ts/.js
   tsgo-bridge uninstall  [--dry-run] [-y] [--home <dir>]... [--claude-only|--codex-only]
   tsgo-bridge doctor     [--json]
   tsgo-bridge lsp        stdio LSP server (used by the Claude Code plugin)

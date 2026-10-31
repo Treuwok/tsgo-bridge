@@ -8,7 +8,7 @@ import { resolveTsgo } from './resolve-tsgo.mjs';
 import { lspClient, mcpClient, CLAUDE_CODE_CAPABILITIES } from './clients.mjs';
 import { PKG_ROOT, VERSION, TS_VERSION, runtimeDir, userDataDir } from './paths.mjs';
 import { claudeHomes, codexHomes } from './setup/homes.mjs';
-import { pluginStatus, PLUGIN_ID, OFFICIAL_ID } from './setup/claude.mjs';
+import { pluginStatus, PLUGIN_ID } from './setup/claude.mjs';
 import { codexStatus, MCP_NAME, SKILL_NAME } from './setup/codex.mjs';
 import { has } from './setup/exec.mjs';
 
@@ -79,10 +79,11 @@ export async function doctor({ json = false } = {}) {
     const s = pluginStatus(h);
     if (!s.ok) { add(`Claude [${h.label}]`, false, s.error); continue; }
     // enabled state comes from this home's settings.json (what a session reads), not from the shared plugin registry
-    const conflict = s.enabled && s.officialEnabled;
+    const conflict = s.enabled && s.conflicts.length > 0;
     const detail = !s.installed ? 'not installed (run: tsgo-bridge setup)'
       : !s.enabled ? `not enabled in this home (plugin v${s.version} is installed; run: tsgo-bridge setup --home "${h.dir}")`
-      : `${PLUGIN_ID} enabled v${s.version}; ${OFFICIAL_ID} ${conflict ? 'ALSO ENABLED — two TypeScript servers will attach (run setup again)' : 'off'}`;
+      : conflict ? `${PLUGIN_ID} enabled v${s.version}, but other plugins take TS/JS files from it: ${s.conflicts.map(c => `${c.id} (${c.overlap.join(' ')}${c.otherLanguages.length ? `; also ${c.otherLanguages.join(', ')}` : ''})`).join('; ')} — run setup again${s.conflicts.some(c => c.otherLanguages.length) ? ' with --disable-conflicting' : ''}`
+      : `${PLUGIN_ID} enabled v${s.version}; no other TS/JS LSP plugin enabled`;
     add(`Claude [${h.label}] ${h.dir}`, !conflict, detail);
   }
   const xv = has('codex');

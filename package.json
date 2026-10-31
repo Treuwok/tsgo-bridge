@@ -1,6 +1,6 @@
 {
   "name": "tsgo-bridge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "TypeScript 7 (tsgo) code intelligence for Claude Code (LSP plugin) and Codex (MCP server + skill), with idle stop and pull-to-push diagnostics.",
   "type": "module",
   "private": true,

@@ -54,7 +54,7 @@ export async function setup(opts) {
     catch (e) { console.log(`\n✘ TypeScript runtime: ${e.message}`); return false; }
   }
   for (const h of cHomes) {
-    const steps = installClaude(h, { source: opts.source ?? DEFAULT_SOURCE, dryRun: opts.dryRun, state });
+    const steps = installClaude(h, { source: opts.source ?? DEFAULT_SOURCE, dryRun: opts.dryRun, state, disableConflicting: opts.disableConflicting });
     printSteps(`Claude Code [${h.label}]`, steps); ok &&= steps.every(s => s.ok);
   }
   if (xHomes.length) {

@@ -39,7 +39,11 @@ npx -y github:treuwok/tsgo-bridge setup --all-homes
 2. Claude Code：
    - `claude plugin marketplace add treuwok/tsgo-bridge`
    - `claude plugin install tsgo-lsp@tsgo-bridge`
-   - 停用官方的 `typescript-lsp@claude-plugins-official`，避免兩個 TS server 同時處理同一批檔案。原本的狀態會記下來，`uninstall` 時還原。
+   - 找出**所有**也替 `.ts/.tsx/.js/...` 註冊 LSP 的已啟用 plugin，例如官方的 `typescript-lsp`、vtsls，或第三方的多語言 `lsp-servers`。Claude Code 會把同一個副檔名交給**最先註冊**的 plugin，所以只要這些 plugin 還開著，tsgo-lsp 就不會被使用。
+     - 只提供 TS/JS 的 plugin：自動停用。
+     - 也提供其他語言的 plugin（例如 Python、Go）：預設**不會**停用，setup 會標示 `CONFLICT` 並列出停用後會失去哪些語言。確認要停用的話，加 `--disable-conflicting` 重跑一次。
+     - 停用前的狀態都會記下來，`uninstall` 時還原。
+   - 啟用與停用是直接寫進該設定目錄的 `settings.json`，因為多個 Orca profile 共用同一個 plugins 目錄時，`claude plugin enable/disable` 會寫錯檔案。
 3. Codex：
    - 把 runtime 複製到使用者的資料目錄。
    - `codex mcp add tsgo -- node <runtime>/bin/tsgo-bridge.mjs mcp`
@@ -66,6 +70,7 @@ npx -y github:treuwok/tsgo-bridge doctor
 | `--all-homes` / `--home <dir>` | 選擇要安裝的設定目錄 |
 | `--claude-only` / `--codex-only` | 只裝其中一邊 |
 | `--idle-minutes <n>` | Codex 的閒置停止時間（預設 10，0 = 不停止） |
+| `--disable-conflicting` | 連同也提供其他語言、但會搶走 `.ts/.js` 的 LSP plugin 一起停用 |
 | `--source <owner/repo \| git url \| 本機路徑>` | Claude marketplace 的來源（測試用） |
 
 Claude 的閒置停止時間是 plugin 的設定（`idle_minutes`），可以在 `/plugin` 或 `claude plugin configure tsgo-lsp@tsgo-bridge` 修改。

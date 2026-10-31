@@ -62,6 +62,39 @@ test('setEnabled edits only the enabledPlugins entry and keeps formatting', asyn
   fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(d2, { recursive: true, force: true });
 });
 
+test('findLspConflicts: manifest, .lsp.json and marketplace-declared servers; TS-only vs multi-language', async () => {
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const { findLspConflicts } = await import('../src/setup/conflicts.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tsgo-conflicts-'));
+  const w = (p, j) => { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), JSON.stringify(j)); };
+  // 1) multi-language plugin declaring servers inline in plugin.json (like a third-party "lsp-servers")
+  w('cache/multi/.claude-plugin/plugin.json', { name: 'lsp-servers', lspServers: { typescript: { command: 'x', extensionToLanguage: { '.ts': 'typescript', '.tsx': 'typescriptreact' } }, python: { command: 'p', extensionToLanguage: { '.py': 'python' } }, go: { command: 'g', extensionToLanguage: { '.go': 'go' } } } });
+  // 2) TS-only plugin using a .lsp.json file
+  w('cache/vtsls/.lsp.json', { vtsls: { command: 'vtsls', extensionToLanguage: { '.ts': 'typescript', '.js': 'javascript' } } });
+  // 3) official plugin whose servers live in the marketplace entry (strict: false)
+  w('home/plugins/known_marketplaces.json', { official: { installLocation: path.join(root, 'mkt') } });
+  w('mkt/.claude-plugin/marketplace.json', { plugins: [{ name: 'typescript-lsp', source: './plugins/typescript-lsp', strict: false, lspServers: { typescript: { command: 't', extensionToLanguage: { '.ts': 'typescript', '.mjs': 'javascript' } } } }] });
+  // 4) unrelated plugin, and a disabled conflicting one
+  w('cache/rust/.lsp.json', { ra: { command: 'ra', extensionToLanguage: { '.rs': 'rust' } } });
+  const installed = [
+    { id: 'lsp-servers@community', enabled: true, installPath: path.join(root, 'cache/multi') },
+    { id: 'vtsls@other', enabled: false, installPath: path.join(root, 'cache/vtsls') }, // default off but enabled in settings below
+    { id: 'typescript-lsp@official', enabled: true, installPath: path.join(root, 'cache/official-empty') },
+    { id: 'rust@x', enabled: true, installPath: path.join(root, 'cache/rust') },
+    { id: 'tsgo-lsp@tsgo-bridge', enabled: true, installPath: root },
+    { id: 'off@x', enabled: true, installPath: path.join(root, 'cache/vtsls') },
+  ];
+  const enabled = { 'vtsls@other': true, 'off@x': false };
+  const res = findLspConflicts({ dir: path.join(root, 'home') }, installed, enabled, 'tsgo-lsp@tsgo-bridge');
+  const byId = Object.fromEntries(res.map(r => [r.id, r]));
+  assert.deepEqual(Object.keys(byId).sort(), ['lsp-servers@community', 'typescript-lsp@official', 'vtsls@other']);
+  assert.deepEqual(byId['lsp-servers@community'].overlap, ['.ts', '.tsx']);
+  assert.deepEqual(byId['lsp-servers@community'].otherLanguages, ['Go', 'Python']);
+  assert.deepEqual(byId['vtsls@other'].otherLanguages, []);
+  assert.deepEqual(byId['typescript-lsp@official'].overlap, ['.mjs', '.ts']);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('languageIdFor', () => {
   assert.equal(languageIdFor('a.tsx'), 'typescriptreact');
   assert.equal(languageIdFor('a.MTS'), 'typescript');

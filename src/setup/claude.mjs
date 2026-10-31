@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { run, withEnv } from './exec.mjs';
+import { findLspConflicts } from './conflicts.mjs';
 
 export const MARKETPLACE = 'tsgo-bridge';
 export const PLUGIN_ID = `tsgo-lsp@${MARKETPLACE}`;
@@ -68,7 +69,8 @@ export function pluginStatus(home) {
     enabled: !!ours && en[PLUGIN_ID] === true,
     officialInstalled: !!official,
     officialEnabled: !!official && en[OFFICIAL_ID] === true,
-    officialSetting: en[OFFICIAL_ID],
+    // every other enabled plugin that registers .ts/.tsx/.js/... (it would take those files from tsgo-lsp)
+    conflicts: findLspConflicts(home, inst.list, en, PLUGIN_ID),
   };
 }
 
@@ -79,7 +81,7 @@ function marketplaces(home) {
 }
 
 /** Returns a list of { step, ok, detail } */
-export function installClaude(home, { source, dryRun, state }) {
+export function installClaude(home, { source, dryRun, state, disableConflicting = false }) {
   const steps = [];
   const step = (name, fn) => {
     if (dryRun) { steps.push({ step: name, ok: true, detail: 'dry-run' }); return true; }
@@ -98,13 +100,30 @@ export function installClaude(home, { source, dryRun, state }) {
   if (!before.installed) { if (!step(`install ${PLUGIN_ID}`, () => claude(home, ['plugin', 'install', PLUGIN_ID]))) return steps; }
   else step(`update ${PLUGIN_ID}`, () => claude(home, ['plugin', 'update', PLUGIN_ID]));
 
-  // remember the official plugin's setting once (first install) so uninstall can restore it exactly
-  const rec = (state.claude[home.dir] ??= {});
-  if (!('officialSetting' in rec)) rec.officialSetting = 'officialWasEnabled' in rec ? (rec.officialWasEnabled ? true : null) : (before.officialSetting ?? null);
-  delete rec.officialWasEnabled;
+  const rec = migrateRecord(state.claude[home.dir] ??= {});
   step(`enable ${PLUGIN_ID} in ${settingsFile(home)}`, () => ({ ok: true, detail: setEnabled(home, PLUGIN_ID, true) ? '' : 'already' }));
-  if (before.officialEnabled) step(`disable ${OFFICIAL_ID} in ${settingsFile(home)}`, () => ({ ok: setEnabled(home, OFFICIAL_ID, false) }));
+
+  // Any other enabled plugin with a .ts/.js LSP server wins over tsgo-lsp, so it has to be turned off.
+  // TS/JS-only plugins are disabled automatically; multi-language ones only with --disable-conflicting,
+  // because disabling them also removes their other languages.
+  for (const c of before.conflicts) {
+    const what = `${c.id} (registers ${c.overlap.join(' ')})`;
+    if (c.otherLanguages.length && !disableConflicting) {
+      steps.push({ step: `CONFLICT: ${what}`, ok: false, detail: `it also serves ${c.otherLanguages.join(', ')}, so it was left enabled and tsgo-lsp will NOT be used for those files. Re-run setup with --disable-conflicting to disable it (you lose LSP for ${c.otherLanguages.join(', ')}), or disable just its TypeScript part if the plugin offers that.` });
+      continue;
+    }
+    if (!(c.id in rec.disabled)) rec.disabled[c.id] = c.setting ?? null; // remember the exact prior value once
+    step(`disable ${what}${c.otherLanguages.length ? ` — also loses ${c.otherLanguages.join(', ')}` : ''}`, () => ({ ok: setEnabled(home, c.id, false) }));
+  }
   return steps;
+}
+
+/** state record: { disabled: { pluginId: previous enabledPlugins value | null } }; migrates 0.1.0/0.1.1 fields. */
+function migrateRecord(rec) {
+  rec.disabled ??= {};
+  if ('officialSetting' in rec) { if (!(OFFICIAL_ID in rec.disabled)) rec.disabled[OFFICIAL_ID] = rec.officialSetting; delete rec.officialSetting; }
+  if ('officialWasEnabled' in rec) { if (!(OFFICIAL_ID in rec.disabled)) rec.disabled[OFFICIAL_ID] = rec.officialWasEnabled ? true : null; delete rec.officialWasEnabled; }
+  return rec;
 }
 
 /** Other homes (sharing the same plugin registry) that still have the plugin enabled. */
@@ -122,11 +141,11 @@ export function uninstallClaude(home, { dryRun, state, allHomes = [] }) {
   const st = pluginStatus(home);
   const rec = state.claude[home.dir];
   step(`remove ${PLUGIN_ID} from ${settingsFile(home)}`, () => ({ ok: true, detail: setEnabled(home, PLUGIN_ID, undefined) ? '' : 'not set' }));
-  if (rec && ('officialSetting' in rec || 'officialWasEnabled' in rec)) {
-    // 0.1.0 recorded only a boolean `officialWasEnabled`
-    const raw = 'officialSetting' in rec ? rec.officialSetting : (rec.officialWasEnabled ? true : null);
-    const prev = raw === null ? undefined : raw;
-    step(`restore ${OFFICIAL_ID} = ${prev === undefined ? '(unset)' : prev}`, () => ({ ok: true, detail: setEnabled(home, OFFICIAL_ID, prev) ? '' : 'unchanged' }));
+  if (rec) {
+    for (const [id, raw] of Object.entries(migrateRecord(rec).disabled)) {
+      const prev = raw === null ? undefined : raw;
+      step(`restore ${id} = ${prev === undefined ? '(unset)' : prev}`, () => ({ ok: true, detail: setEnabled(home, id, prev) ? '' : 'unchanged' }));
+    }
   }
   const others = otherUsers(home, allHomes);
   if (others.length) steps.push({ step: `keep shared install (still enabled in ${others.length} other home(s))`, ok: true, detail: others.map(h => h.label).join(', ') });
