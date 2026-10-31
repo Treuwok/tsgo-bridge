@@ -1,0 +1,13 @@
+{
+  "name": "tsgo-bridge",
+  "owner": { "name": "treuwok" },
+  "metadata": { "description": "TypeScript 7 (tsgo) integration for coding agents" },
+  "plugins": [
+    {
+      "name": "tsgo-lsp",
+      "source": "./",
+      "description": "TypeScript 7 native LSP (tsgo) for Claude Code with pull-to-push diagnostics and idle stop",
+      "category": "development"
+    }
+  ]
+}

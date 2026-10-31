@@ -1,0 +1,28 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [20, 24]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+      - name: doctor (self-tests; agent CLIs are absent on CI and get skipped)
+        run: node bin/tsgo-bridge.mjs doctor
+      - name: runtime install path (no bundled node_modules)
+        shell: bash
+        run: |
+          rm -rf node_modules
+          TSGO_BRIDGE_DATA="$RUNNER_TEMP/tsgo-data" node bin/tsgo-bridge.mjs doctor
