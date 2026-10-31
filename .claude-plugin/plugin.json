@@ -1,12 +1,13 @@
 {
   "name": "tsgo-lsp",
   "displayName": "TypeScript 7 (tsgo) LSP",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript/JavaScript code intelligence via the TypeScript 7 native language server (tsgo): type errors after edits, go-to-definition, references. Uses ~50% less memory than tsserver and stops itself when idle.",
   "author": { "name": "treuwok" },
   "repository": "https://github.com/treuwok/tsgo-bridge",
   "license": "MIT",
   "keywords": ["typescript", "lsp", "tsgo", "typescript-7"],
+  "defaultEnabled": false,
   "userConfig": {
     "idle_minutes": {
       "type": "number",

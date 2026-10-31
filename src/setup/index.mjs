@@ -78,7 +78,8 @@ export async function uninstall(opts) {
   const xHomes = !opts.claudeOnly && has('codex') ? pickHomes(codexHomes(), { ...opts, allHomes: opts.allHomes ?? true }) : [];
   console.log(`tsgo-bridge uninstall${opts.dryRun ? ' — DRY RUN' : ''}`);
   if (!opts.dryRun && !(await confirm(`Remove tsgo-bridge from ${cHomes.length} Claude and ${xHomes.length} Codex home(s)?`, opts.yes))) { console.log('Aborted.'); return false; }
-  for (const h of cHomes) printSteps(`Claude Code [${h.label}]`, uninstallClaude(h, { dryRun: opts.dryRun, state }));
+  const allClaude = cHomes.length ? claudeHomes() : [];
+  for (const h of cHomes) printSteps(`Claude Code [${h.label}]`, uninstallClaude(h, { dryRun: opts.dryRun, state, allHomes: allClaude }));
   for (const h of xHomes) { printSteps(`Codex [${h.label}]`, uninstallCodex(h, { dryRun: opts.dryRun })); if (!opts.dryRun) delete state.codex[h.dir]; }
   if (!opts.dryRun) saveState(state);
   return true;

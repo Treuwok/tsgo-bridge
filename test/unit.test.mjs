@@ -39,6 +39,29 @@ test('applyContentChanges: full and ranged edits (incl. CRLF and surrogate pairs
   assert.equal(applyContentChanges('a\nb', [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, text: 'X' }, { range: { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } }, text: 'Y' }]), 'Xa\nbY');
 });
 
+test('setEnabled edits only the enabledPlugins entry and keeps formatting', async () => {
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const { setEnabled, readEnabled } = await import('../src/setup/claude.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tsgo-settings-'));
+  const home = { dir };
+  const original = '{\n  "env": {\n    "A": "1"\n  },\n  "enabledPlugins": {\n    "x@y": true,\n    "typescript-lsp@claude-plugins-official": true\n  },\n  "theme": "dark"\n}\n';
+  fs.writeFileSync(path.join(dir, 'settings.json'), original);
+  setEnabled(home, 'typescript-lsp@claude-plugins-official', false);
+  assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), original.replace('"typescript-lsp@claude-plugins-official": true', '"typescript-lsp@claude-plugins-official": false'));
+  setEnabled(home, 'tsgo-lsp@tsgo-bridge', true);
+  const after = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
+  assert.match(after, /"enabledPlugins": \{\n {4}"tsgo-lsp@tsgo-bridge": true,\n {4}"x@y": true,/);
+  assert.match(after, /"theme": "dark"/);
+  assert.deepEqual(readEnabled(home), { 'tsgo-lsp@tsgo-bridge': true, 'x@y': true, 'typescript-lsp@claude-plugins-official': false });
+  setEnabled(home, 'tsgo-lsp@tsgo-bridge', undefined);
+  assert.equal(readEnabled(home)['tsgo-lsp@tsgo-bridge'], undefined);
+  // missing file / no enabledPlugins
+  const d2 = fs.mkdtempSync(path.join(os.tmpdir(), 'tsgo-settings-'));
+  setEnabled({ dir: d2 }, 'tsgo-lsp@tsgo-bridge', true);
+  assert.deepEqual(readEnabled({ dir: d2 }), { 'tsgo-lsp@tsgo-bridge': true });
+  fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(d2, { recursive: true, force: true });
+});
+
 test('languageIdFor', () => {
   assert.equal(languageIdFor('a.tsx'), 'typescriptreact');
   assert.equal(languageIdFor('a.MTS'), 'typescript');

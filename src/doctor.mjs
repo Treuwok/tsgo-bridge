@@ -78,8 +78,12 @@ export async function doctor({ json = false } = {}) {
   else for (const h of claudeHomes()) {
     const s = pluginStatus(h);
     if (!s.ok) { add(`Claude [${h.label}]`, false, s.error); continue; }
-    const good = s.enabled && !s.officialEnabled;
-    add(`Claude [${h.label}] ${h.dir}`, good || !s.installed, s.installed ? `${PLUGIN_ID} ${s.enabled ? 'enabled' : 'DISABLED'} v${s.version}; ${OFFICIAL_ID} ${s.officialEnabled ? 'ENABLED (conflict)' : 'off'}` : 'not installed (run: tsgo-bridge setup)');
+    // enabled state comes from this home's settings.json (what a session reads), not from the shared plugin registry
+    const conflict = s.enabled && s.officialEnabled;
+    const detail = !s.installed ? 'not installed (run: tsgo-bridge setup)'
+      : !s.enabled ? `not enabled in this home (plugin v${s.version} is installed; run: tsgo-bridge setup --home "${h.dir}")`
+      : `${PLUGIN_ID} enabled v${s.version}; ${OFFICIAL_ID} ${conflict ? 'ALSO ENABLED — two TypeScript servers will attach (run setup again)' : 'off'}`;
+    add(`Claude [${h.label}] ${h.dir}`, !conflict, detail);
   }
   const xv = has('codex');
   if (!xv) add('Codex CLI', true, 'not found on PATH (skipped)');
