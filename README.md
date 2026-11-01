@@ -4,20 +4,35 @@ tsgo-bridge connects Claude Code and Codex to the TypeScript 7 native language s
 
 [繁體中文說明](README.zh-TW.md)
 
-## Purpose
+## What it does
 
-The agent uses tsgo-bridge to get TypeScript and JavaScript code intelligence:
+tsgo-bridge gives the agent TypeScript and JavaScript code intelligence from tsgo:
 
 - Type errors after each edit.
 - Go to definition.
 - Find references.
 - Hover information and document symbols.
 
-tsgo-bridge uses less memory than tsserver. In one test (a monorepo with 8 open packages), tsserver 6 used approximately 3.9 GB. tsgo-bridge used approximately 1.9 GB.
+In Claude Code, the agent gets this information through the LSP plugin. In Codex, the agent gets it through MCP tools (`ts_diagnostics`, `ts_definition`, `ts_references`, `ts_hover`, `ts_symbols`).
 
-When the server is idle for 10 minutes, tsgo-bridge stops it. The next request starts it again in approximately 1 second.
+## Benefits
 
-tsgo-bridge does not change the TypeScript version of your projects. It uses a private copy of TypeScript 7 for the agent only. Your project builds continue to use the TypeScript version of the project.
+| | tsserver 6 (official plugin) | tsgo-bridge |
+|---|---|---|
+| Memory (monorepo, 8 open packages) | approximately 3.9 GB | approximately 1.9 GB |
+| Memory after 10 idle minutes | no change | approximately 58 MB (tsgo stops) |
+| Time from edit to type errors | 1.5 to 8 seconds | 0.1 to 2.4 seconds |
+| Codex | no TypeScript tools | 5 MCP tools and a skill |
+
+- **The agent sees its own type errors.** After an edit, the agent gets the errors in the next step. It can correct them before it continues.
+- **The agent finds code by meaning.** It can use definitions and references instead of a text search. A text search can find words that have the same name but a different meaning.
+- **Less memory.** tsgo uses approximately half the memory of tsserver. Each session starts its own server, so the saving increases with the number of sessions.
+- **Idle stop.** tsgo-bridge stops tsgo after 10 idle minutes. The next request starts it again in approximately 1 second.
+- **One install for two clients.** One `setup` command installs the Claude Code plugin and the Codex MCP server. It works on Windows, macOS, and Linux.
+- **No change to your projects.** tsgo-bridge uses a private copy of TypeScript 7 for the agent only. Your project builds continue to use the TypeScript version of the project.
+- **Reversible.** `uninstall` removes tsgo-bridge and enables the plugins that setup disabled.
+
+The numbers come from tests on one Windows computer. Your results can be different.
 
 ## Why this exists
 
@@ -27,10 +42,13 @@ tsgo-bridge is a temporary bridge. It exists because tsgo and the agent clients 
 2. **Claude Code accepts only pushed diagnostics.** Claude Code does not ask the server for diagnostics. If you connect tsgo directly to Claude Code, Claude Code shows no type errors after an edit.
 3. **Codex has no LSP client.** Codex cannot use any language server directly. It can use MCP servers.
 
-These issues track the problem:
+These issues track the problem. Status on 2026-11-01:
 
-- [microsoft/TypeScript#63928](https://github.com/microsoft/TypeScript/issues/63928) (fix proposed in [#63921](https://github.com/microsoft/TypeScript/pull/63921))
-- [anthropics/claude-code#101041](https://github.com/anthropics/claude-code/issues/101041)
+| Item | Proposed change | Status |
+|---|---|---|
+| [microsoft/TypeScript#63928](https://github.com/microsoft/TypeScript/issues/63928) | tsgo pushes diagnostics to clients that do not pull | Open, label "Needs Investigation" |
+| [microsoft/TypeScript#63921](https://github.com/microsoft/TypeScript/pull/63921) | Pull request that adds the push | Open, not merged, review required. No update since 2026-08-20. |
+| [anthropics/claude-code#101041](https://github.com/anthropics/claude-code/issues/101041) | Claude Code pulls diagnostics from the server | Open, label "enhancement" |
 
 tsgo-bridge also contains two workarounds for tsgo:
 

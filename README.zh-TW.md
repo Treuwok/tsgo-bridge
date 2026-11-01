@@ -9,6 +9,17 @@
 | 編輯後型別錯誤 | 1.5–8 秒 | 0.1–2.4 秒 |
 | Codex | 沒有 | `ts_diagnostics` 等 MCP 工具 + skill |
 
+它帶來的好處：
+- **Agent 看得到自己造成的型別錯誤。** 編輯後的下一步就會收到錯誤，可以先修正再繼續。
+- **用語意找程式碼。** 用 definition / references 取代文字搜尋，不會被同名但意思不同的字誤導。
+- **省記憶體。** tsgo 大約只用 tsserver 一半的記憶體；每個 session 都會各開一個 server，所以 session 越多省越多。
+- **閒置自動停止。** 閒置 10 分鐘就停掉 tsgo（約 1 GB → 58 MB），下次用到約 1 秒內重啟。
+- **一次裝好兩邊。** 一個 `setup` 指令同時裝好 Claude Code plugin 和 Codex MCP，Windows、macOS、Linux 都能用。
+- **不動你的專案。** 只替 agent 用一份私有的 TypeScript 7，專案 build 照樣用專案自己的 TypeScript 版本。
+- **可以完整還原。** `uninstall` 會移除 tsgo-bridge，並重新啟用 setup 停用的 plugin。
+
+以上數字是在一台 Windows 電腦上測的，實際結果可能不同。
+
 ## 為什麼需要它
 
 tsgo-bridge 是**暫時性的橋接**。之所以需要它，是因為 tsgo 目前沒辦法直接和這些 agent 搭配使用：
@@ -17,7 +28,13 @@ tsgo-bridge 是**暫時性的橋接**。之所以需要它，是因為 tsgo 目�
 2. **Claude Code 只接受推送的診斷結果。** 它不會主動跟伺服器要診斷，所以 tsgo 直接接上 Claude Code 的話，編輯後完全看不到型別錯誤。
 3. **Codex 沒有 LSP client。** 它無法直接使用語言伺服器，只能用 MCP。
 
-相關 issue：[microsoft/TypeScript#63928](https://github.com/microsoft/TypeScript/issues/63928)（修正 PR：[#63921](https://github.com/microsoft/TypeScript/pull/63921)）、[anthropics/claude-code#101041](https://github.com/anthropics/claude-code/issues/101041)。
+相關 issue 與 PR（2026-11-01 的狀態）：
+
+| 項目 | 內容 | 狀態 |
+|---|---|---|
+| [microsoft/TypeScript#63928](https://github.com/microsoft/TypeScript/issues/63928) | 讓 tsgo 對不支援 pull 的 client 推送診斷 | Open，標籤「Needs Investigation」 |
+| [microsoft/TypeScript#63921](https://github.com/microsoft/TypeScript/pull/63921) | 實作推送的 PR | Open、未 merge、等待 review；2026-08-20 之後沒有更新 |
+| [anthropics/claude-code#101041](https://github.com/anthropics/claude-code/issues/101041) | 讓 Claude Code 主動 pull 診斷 | Open，標籤「enhancement」 |
 
 另外還繞過了 tsgo 的兩個問題：不轉送 client 的第二次 `initialized`（tsgo 收到兩次會出錯停止），也不告訴 tsgo client 會監看檔案（讓 tsgo 自己監看）。
 
