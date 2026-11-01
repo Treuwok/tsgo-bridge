@@ -76,7 +76,6 @@ You can remove the Codex part when Codex has an LSP client.
 - Node.js 20 or later, with npm.
 - git.
 - Claude Code CLI, Codex CLI, or both.
-- Access to the private repository `github.com/treuwok/tsgo-bridge` (for example, run `gh auth login`).
 
 ## Install
 

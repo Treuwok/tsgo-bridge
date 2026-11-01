@@ -52,7 +52,6 @@ tsgo-bridge 是**暫時性的橋接**。之所以需要它，是因為 tsgo 目�
 
 需求：Node.js ≥ 20（含 npm）、git，以及 Claude Code 或 Codex CLI（有哪個裝哪個）。
 
-這個 repo 是私有的，需要先能用 git 存取 `github.com/treuwok/tsgo-bridge`（例如執行過 `gh auth login`）。
 
 ```bash
 # 預覽會做哪些事（不會修改任何設定）
