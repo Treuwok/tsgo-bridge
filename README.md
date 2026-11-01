@@ -19,6 +19,35 @@ When the server is idle for 10 minutes, tsgo-bridge stops it. The next request s
 
 tsgo-bridge does not change the TypeScript version of your projects. It uses a private copy of TypeScript 7 for the agent only. Your project builds continue to use the TypeScript version of the project.
 
+## Why this exists
+
+tsgo-bridge is a temporary bridge. It exists because tsgo and the agent clients do not work together directly at this time.
+
+1. **tsgo does not push diagnostics.** The TypeScript 7 language server sends per-file diagnostics only when the client asks for them (pull, `textDocument/diagnostic`). It does not send `textDocument/publishDiagnostics` (push).
+2. **Claude Code accepts only pushed diagnostics.** Claude Code does not ask the server for diagnostics. If you connect tsgo directly to Claude Code, Claude Code shows no type errors after an edit.
+3. **Codex has no LSP client.** Codex cannot use any language server directly. It can use MCP servers.
+
+These issues track the problem:
+
+- [microsoft/TypeScript#63928](https://github.com/microsoft/TypeScript/issues/63928) (fix proposed in [#63921](https://github.com/microsoft/TypeScript/pull/63921))
+- [anthropics/claude-code#101041](https://github.com/anthropics/claude-code/issues/101041)
+
+tsgo-bridge also contains two workarounds for tsgo:
+
+- It does not send a second `initialized` notification to tsgo. tsgo stops with an error if it gets two.
+- It does not tell tsgo that the client watches files. tsgo then watches the files itself.
+
+### When to remove it
+
+You can remove the Claude Code part when one of these conditions is true:
+
+- tsgo sends pushed diagnostics.
+- Claude Code asks the server for diagnostics (pull).
+
+Before you remove it, set `TSGO_PULL_TO_PUSH=0` and check that Claude Code still shows type errors. tsgo-bridge then only passes messages between Claude Code and tsgo, and stops tsgo when it is idle.
+
+You can remove the Codex part when Codex has an LSP client.
+
 ## How it works
 
 - **Claude Code**: The plugin `tsgo-lsp` adds an LSP server. TypeScript 7 sends diagnostics only when the client asks for them (pull). Claude Code accepts only diagnostics that the server sends (push). tsgo-bridge asks tsgo for the diagnostics and sends them to Claude Code.

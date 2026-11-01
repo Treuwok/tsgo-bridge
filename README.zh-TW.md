@@ -9,6 +9,20 @@
 | 編輯後型別錯誤 | 1.5–8 秒 | 0.1–2.4 秒 |
 | Codex | 沒有 | `ts_diagnostics` 等 MCP 工具 + skill |
 
+## 為什麼需要它
+
+tsgo-bridge 是**暫時性的橋接**。之所以需要它，是因為 tsgo 目前沒辦法直接和這些 agent 搭配使用：
+
+1. **tsgo 不會主動推送診斷結果。** TS 7 的語言伺服器只在 client 主動要求時（pull，`textDocument/diagnostic`）才回傳單一檔案的診斷，不會送出 `textDocument/publishDiagnostics`（push）。
+2. **Claude Code 只接受推送的診斷結果。** 它不會主動跟伺服器要診斷，所以 tsgo 直接接上 Claude Code 的話，編輯後完全看不到型別錯誤。
+3. **Codex 沒有 LSP client。** 它無法直接使用語言伺服器，只能用 MCP。
+
+相關 issue：[microsoft/TypeScript#63928](https://github.com/microsoft/TypeScript/issues/63928)（修正 PR：[#63921](https://github.com/microsoft/TypeScript/pull/63921)）、[anthropics/claude-code#101041](https://github.com/anthropics/claude-code/issues/101041)。
+
+另外還繞過了 tsgo 的兩個問題：不轉送 client 的第二次 `initialized`（tsgo 收到兩次會出錯停止），也不告訴 tsgo client 會監看檔案（讓 tsgo 自己監看）。
+
+**什麼時候可以拿掉：** 只要 tsgo 支援推送診斷，或 Claude Code 支援 pull，就可以拿掉 Claude Code 這部分。拿掉前先設 `TSGO_PULL_TO_PUSH=0`，確認 Claude Code 還是看得到型別錯誤；這時 tsgo-bridge 只負責轉送訊息和閒置停止。等 Codex 有了 LSP client，Codex 這部分也可以拿掉。
+
 ## 運作方式
 
 - **Claude Code**：plugin（`tsgo-lsp`）註冊一個 LSP server。
