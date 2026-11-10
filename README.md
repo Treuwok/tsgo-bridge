@@ -28,6 +28,7 @@ In Claude Code, the agent gets this information through the LSP plugin. In Codex
 - **The agent finds code by meaning.** It can use definitions and references instead of a text search. A text search can find words that have the same name but a different meaning.
 - **Less memory.** tsgo uses approximately half the memory of tsserver. Each session starts its own server, so the saving increases with the number of sessions.
 - **Idle stop.** tsgo-bridge stops tsgo after 10 idle minutes. The next request starts it again in approximately 1 second.
+- **Idle worktrees are released.** Claude Code does not close files. tsgo keeps a project in memory while one of its files is open. Thus tsgo-bridge closes the files of a git repository or worktree that the agent did not edit or query for 10 minutes (the `idle_minutes` setting), and tsgo releases that memory. When the agent uses one of those files again, tsgo-bridge opens all of them again, with the latest text. Worktrees that are in use stay loaded: each one can use more than 1 GB for a large app.
 - **One install for two clients.** One `setup` command installs the Claude Code plugin and the Codex MCP server. It works on Windows, macOS, and Linux.
 - **No change to your projects.** tsgo-bridge uses a private copy of TypeScript 7 for the agent only. Your project builds continue to use the TypeScript version of the project.
 - **Reversible.** `uninstall` removes tsgo-bridge and enables the plugins that setup disabled.
@@ -129,6 +130,7 @@ Uninstall removes the plugin, the MCP server, and the skill. It also enables the
 - tsgo-bridge does not load TypeScript plugins from `tsconfig.json` (for example, the Next.js plugin).
 - tsgo-bridge does not support Vue, Svelte, or Astro templates.
 - After an idle stop, the first request takes approximately 1 second longer.
+- The first edit or request in a released worktree loads its project again (approximately 2 seconds for a large app). Find references and workspace symbol search do not include a released worktree. Worktrees are separate copies of the code, so they usually do not refer to each other.
 
 ## Development
 

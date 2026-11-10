@@ -14,6 +14,7 @@
 - **用語意找程式碼。** 用 definition / references 取代文字搜尋，不會被同名但意思不同的字誤導。
 - **省記憶體。** tsgo 大約只用 tsserver 一半的記憶體；每個 session 都會各開一個 server，所以 session 越多省越多。
 - **閒置自動停止。** 閒置 10 分鐘就停掉 tsgo（約 1 GB → 58 MB），下次用到約 1 秒內重啟。
+- **閒置的 worktree 會被釋放。** Claude Code 從不關檔，而 tsgo 只要某個 project 還有檔案開著，就把整個 project 留在記憶體。所以某個 git repo / worktree 超過 10 分鐘（`idle_minutes`）沒被編輯或查詢，tsgo-bridge 就關掉它的檔案，tsgo 隨後釋放記憶體；agent 再用到時，用最新內容整個重新開回來。正在用的 worktree 一律保留（大型專案每個可達 1 GB 以上）。
 - **一次裝好兩邊。** 一個 `setup` 指令同時裝好 Claude Code plugin 和 Codex MCP，Windows、macOS、Linux 都能用。
 - **不動你的專案。** 只替 agent 用一份私有的 TypeScript 7，專案 build 照樣用專案自己的 TypeScript 版本。
 - **可以完整還原。** `uninstall` 會移除 tsgo-bridge，並重新啟用 setup 停用的 plugin。
@@ -102,7 +103,7 @@ npx -y github:treuwok/tsgo-bridge doctor
 | `--disable-conflicting` | 連同也提供其他語言、但會搶走 `.ts/.js` 的 LSP plugin 一起停用 |
 | `--source <owner/repo \| git url \| 本機路徑>` | Claude marketplace 的來源（測試用） |
 
-Claude 的閒置停止時間是 plugin 的設定（`idle_minutes`），可以在 `/plugin` 或 `claude plugin configure tsgo-lsp@tsgo-bridge` 修改。
+Claude 的閒置時間（`idle_minutes`，預設 10）是 plugin 的設定：整個 tsgo 閒置這麼久就停止，某個 worktree 這麼久沒被用到就釋放。可以在 `/plugin` 或 `claude plugin configure tsgo-lsp@tsgo-bridge` 修改。
 
 ## 更新
 
@@ -123,7 +124,7 @@ npx -y github:treuwok/tsgo-bridge uninstall
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
-| `TSGO_IDLE_MS` / `TSGO_IDLE_MINUTES` | 10 分鐘 | 閒置停止時間；0 = 不停止 |
+| `TSGO_IDLE_MS` / `TSGO_IDLE_MINUTES` | 10 分鐘 | 閒置停止時間；Claude Code 也會釋放這麼久沒用到的 worktree；0 = 都不做 |
 | `TSGO_BRIDGE_LOG` | 無 | 寫 log 到這個檔案（5 MB 輪替） |
 | `TSGO_TSC` | 內建 | 指定其他 tsgo / tsc 執行檔 |
 | `TSGO_DIAG_DEBOUNCE_MS` | 50 | 合併連續編輯的時間 |
@@ -137,6 +138,7 @@ npx -y github:treuwok/tsgo-bridge uninstall
 - TypeScript 7 比 5/6 更嚴格，可能回報專案自己的 build 不會報的錯誤。
 - tsconfig 裡的 TS plugin（例如 Next.js 的 `{ "name": "next" }`）不會載入。Vue、Svelte、Astro 範本也不支援。
 - 閒置停止後的第一個請求要多等約 1 秒。
+- 被釋放的 worktree，下一次編輯或查詢要重新載入 project（大型專案約 2 秒）；find references 和 workspace symbol 不會搜尋被釋放的 worktree（不同 worktree / repo 通常不會互相引用）。
 
 ## 開發
 

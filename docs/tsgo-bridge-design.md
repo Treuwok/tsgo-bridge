@@ -152,6 +152,16 @@ npx -y github:<owner>/tsgo-bridge setup
 | TS 7 版本 | 跟著 tsgo-bridge 版本（固定在 package.json），升級 = 發新版 | 7.0.2 |
 | log | `TSGO_BRIDGE_LOG=<檔案>`（輪替，5 MB × 2） | 關閉 |
 | 自訂執行檔 | `TSGO_TSC=<路徑>` | 無 |
+| 閒置 worktree 釋放 | 與閒置停止共用 `idle_minutes` / `TSGO_IDLE_MS`（只有 LSP 用；MCP 每個 git root 一個 TsgoManager，各自閒置停止，並沿用每個 manager 50 份文件的上限） | 10 分鐘 |
+
+**為什麼要釋放閒置的 worktree（2026-11-10 事故）**：Claude Code 不送 `didClose`，tsgo 7.0.2 只要 project 還有開啟的檔案就保留它；它只在處理 `didOpen` 時移除沒有開啟檔案的 project，之後 30 秒沒有編輯才清快取，Go 再把記憶體還給系統。一個 session 的 subagent 在 19 小時內輪流進出 4 個 worktree、編輯 41 個檔案，tsgo 就同時載入 4 份 project（各約 1.3–1.5 GB live heap），加上診斷批次重疊與 Go 的 2 倍 heap 目標，長到 49 GB footprint。設計如下：
+
+- **單位是 git root**（repo 或 worktree）。不同 worktree 是彼此獨立的程式碼副本，關掉一個不會改變另一個的診斷或 references；同一個 repo 內的 tsconfig project 可能互相 import，所以不拆開。不在 git 裡的檔案共用一格。
+- **依閒置時間釋放，不設數量上限。** 某個 workspace 超過 `idle_minutes` 沒被編輯或查詢（bridge 自己拉診斷不算），就把它的文件送 `didClose` 並「停放」（保留全文與版本）。由閒置檢查計時器處理（每 `idle_minutes`/4、最多 30 秒一次）：停放後開關一份 `untitled:` 文件，因為 tsgo 只在處理 `didOpen` 時移除沒有開啟文件的 project（實測不會動到還有開啟文件的 project）。
+  - 曾經用「最多 2 個 workspace」的數量上限：4 個 worktree 同時編輯時，每次修改都觸發淘汰與重新載入，footprint 峰值反而比全部保留高（10.2 vs 8.0 GB），36 次修改有 29 次 30 秒內收不到錯誤。所以改成時間。實際紀錄（7 天、13 個 session、24 個 worktree）：任何 10 分鐘內，單一 session 只在 1 個 worktree 編輯，整台機器最多 2 個。
+- 停放的文件收到 `didChange`（全文或局部）、任何帶 `textDocument.uri` / `item.uri` 的請求，或同一個 workspace 有新檔案 `didOpen` 時，整個 workspace 的停放文件依原順序一起重新開啟（再套用修改），並重新拉診斷。
+- 每份文件同一時間最多一個診斷 pull；pull 進行中又被修改就記下來，回來後再拉一次。這把進行中的請求限制在開啟文件數以內（事故時是 30 批 × 41 份重疊），不會因為某個請求卡住而擋住其他文件，也不會在連續編輯時餓死。仍然檢查所有開啟的文件：不同 git root 也可能透過 submodule、`file:` 套件或 symlink 的 node_modules 互相影響。
+- 同時真正在編輯的 worktree 都會保留：這個大型 Next.js 專案每個約 2 GB footprint。要讓大量 subagent 同時改很多 worktree，應改用一次性的型別檢查（例如 `tsc --noEmit`），不要每個都掛常駐 LSP。
 
 ## 4. 平台差異檢查表
 | 項目 | Windows | macOS | Linux |
