@@ -209,14 +209,15 @@ test('one diagnostics pull per document at a time; results keep coming during fa
   } finally { await stop(c); }
 });
 
-test('a document parked while its diagnostics are in flight still gets them', async () => {
-  const b = workspace('inflight-b'), c2 = workspace('inflight-c');
-  const c = await fakeProxy(b.dir, { FAKE_DIAG_DELAY_MS: '1500', TSGO_IDLE_MS: String(IDLE) });
+test('a workspace is not parked while its diagnostics are in flight; the edit made meanwhile is published', async () => {
+  const w = workspace('inflight');
+  // the pull takes longer than the idle time, and the agent edits during it (per Codex review on PR #5)
+  const c = await fakeProxy(w.dir, { FAKE_DIAG_DELAY_MS: '1500', TSGO_IDLE_MS: String(IDLE) });
   try {
-    c.notify('textDocument/didOpen', { textDocument: { uri: b.uri('x.ts'), languageId: 'typescript', version: 1, text: 'B1' } });
-    await sleep(IDLE + 300); // B is idle and the idle check parks it, while B's pull is still in flight
-    open(c, c2.uri('x.ts'));
-    assert.ok(await waitFor(() => lastMessage(c, b.uri('x.ts')) === 'B1', 5000), 'the result for parked B was dropped');
+    c.notify('textDocument/didOpen', { textDocument: { uri: w.uri('x.ts'), languageId: 'typescript', version: 1, text: 'first' } });
+    await sleep(150);
+    c.notify('textDocument/didChange', { textDocument: { uri: w.uri('x.ts'), version: 2 }, contentChanges: [{ text: 'second' }] });
+    assert.ok(await waitFor(() => lastMessage(c, w.uri('x.ts')) === 'second', 8000), `last result: ${JSON.stringify(lastMessage(c, w.uri('x.ts')))}`);
   } finally { await stop(c); }
 });
 

@@ -107,8 +107,6 @@ export class TsgoManager extends EventEmitter {
     this.#open(uri, { languageId, version, text, workspace });
   }
 
-  /** Open for the client: open in tsgo, or parked by the working-set limit. */
-  isOpen(uri) { return this.docs.has(uri) || this.parked.has(uri); }
 
   /** Mark an open document (and its workspace) as used now; the frontend decides what counts as use. */
   markUsed(uri) {
@@ -188,7 +186,9 @@ export class TsgoManager extends EventEmitter {
   #parkIdle() {
     if (!(this.workspaceIdleMs > 0)) return 0;
     const cutoff = Date.now() - this.workspaceIdleMs;
-    const idle = [...this.docs].filter(([, d]) => (this.lastUse.get(d.workspace) ?? 0) < cutoff);
+    // a request still in flight is use too, as for the idle stop of the whole server (pending.size > 0)
+    const busy = new Set([...this.pending.values()].map(item => this.docs.get(docUri(item.params))?.workspace));
+    const idle = [...this.docs].filter(([, d]) => !busy.has(d.workspace) && (this.lastUse.get(d.workspace) ?? 0) < cutoff);
     if (!idle.length) return 0;
     this.log('parking', idle.length, 'docs of idle workspaces', [...new Set(idle.map(([, d]) => d.workspace))]);
     for (const [uri, d] of idle) { this.#close(uri); this.parked.set(uri, d); }
