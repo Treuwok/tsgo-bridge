@@ -40,8 +40,9 @@ Usage:
   tsgo-bridge mcp        stdio MCP server (used by Codex)
   tsgo-bridge version
 
-Environment: TSGO_IDLE_MS / TSGO_IDLE_MINUTES (default 10 min, 0 = never stop), TSGO_BRIDGE_LOG=<file>,
-             TSGO_TSC=<native binary>, TSGO_DIAG_DEBOUNCE_MS (50), TSGO_PULL_TO_PUSH=0, TSGO_BRIDGE_DATA=<dir>`;
+Environment: TSGO_IDLE_MS / TSGO_IDLE_MINUTES (default 10 min, 0 = never stop; Claude Code also releases git roots
+             unused for that long), TSGO_BRIDGE_LOG=<file>, TSGO_TSC=<native binary>,
+             TSGO_DIAG_DEBOUNCE_MS (50), TSGO_PULL_TO_PUSH=0, TSGO_BRIDGE_DATA=<dir>`;
 
 switch (cmd) {
   case 'lsp': { const { runLspProxy } = await import('../src/lsp-proxy.mjs'); runLspProxy(); break; }

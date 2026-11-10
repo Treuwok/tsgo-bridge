@@ -10,9 +10,10 @@ import { TsgoManager } from './tsgo-manager.mjs';
 import { resolveTsgo } from './resolve-tsgo.mjs';
 import { createLogger } from './log.mjs';
 import { TS_EXTENSIONS, languageIdFor, lineAt } from './text.mjs';
+import { gitRoot, norm } from './workspace.mjs';
 import { VERSION, TS_VERSION } from './paths.mjs';
 
-const MAX_OPEN = 50;
+const MAX_OPEN = 50; // per workspace manager; the least recently used documents are closed
 const MAX_ITEMS = 200;
 const SEVERITY = { 1: 'error', 2: 'warning', 3: 'info', 4: 'hint' };
 const SYMBOL_KIND = { 2: 'module', 3: 'namespace', 5: 'class', 6: 'method', 7: 'property', 8: 'field', 9: 'constructor', 10: 'enum', 11: 'interface', 12: 'function', 13: 'variable', 14: 'constant', 22: 'enumMember', 23: 'struct', 26: 'typeParameter' };
@@ -44,20 +45,13 @@ export function runMcpServer({ stdin = process.stdin, stdout = process.stdout, e
   const log = createLogger(env.TSGO_BRIDGE_LOG, 'mcp');
   const idleMs = env.TSGO_IDLE_MS !== undefined ? Number(env.TSGO_IDLE_MS) : 600_000;
   const send = msg => { try { stdout.write(frameNdjson(msg)); } catch {} };
-  const managers = new Map(); // root -> { mgr, lru: Map<uri, true> }
+  const managers = new Map(); // root -> { mgr, root }
   let roots = []; // absolute paths from roots/list
   let clientCaps = {};
   let seq = 0;
   const pendingClient = new Map();
 
   // ---------- workspace / files ----------
-  const norm = p => (process.platform === 'win32' || process.platform === 'darwin' ? p.toLowerCase() : p);
-  function gitRoot(dir) {
-    for (let d = dir; ; d = path.dirname(d)) {
-      if (fs.existsSync(path.join(d, '.git'))) return d;
-      if (path.dirname(d) === d) return null;
-    }
-  }
   function rootFor(file) {
     const f = norm(file);
     const hit = roots.filter(r => f.startsWith(norm(r) + path.sep) || f === norm(r)).sort((a, b) => b.length - a.length)[0];
@@ -96,9 +90,9 @@ export function runMcpServer({ stdin = process.stdin, stdout = process.stdout, e
         },
       },
     };
-    const mgr = new TsgoManager({ resolveCommand: () => resolveTsgo({ log }), initParams, idleMs, log, env });
+    const mgr = new TsgoManager({ resolveCommand: () => resolveTsgo({ log }), initParams, idleMs, maxDocs: MAX_OPEN, log, env });
     mgr.on('notification', () => {});
-    w = { mgr, root, lru: new Map() };
+    w = { mgr, root };
     managers.set(root, w);
     log('workspace', root);
     return w;
@@ -112,15 +106,14 @@ export function runMcpServer({ stdin = process.stdin, stdout = process.stdout, e
     const d = w.mgr.docs.get(uri);
     if (!d) w.mgr.openDoc(uri, languageIdFor(file), 1, text);
     else if (d.text !== text) w.mgr.changeDoc(uri, d.version + 1, [{ text }]);
-    w.lru.delete(uri); w.lru.set(uri, true);
-    while (w.lru.size > MAX_OPEN) { const old = w.lru.keys().next().value; w.lru.delete(old); w.mgr.closeDoc(old); }
+    w.mgr.markUsed(uri); // a tool used this file; resyncOpen below does not count as use
     return { w, uri, text };
   }
   /** Re-sync every open document of a workspace (catches cross-file edits the server may not have seen yet). */
   function resyncOpen(w) {
     for (const uri of [...w.mgr.docs.keys()]) {
       let file; try { file = fileURLToPath(uri); } catch { continue; }
-      if (!fs.existsSync(file)) { w.mgr.closeDoc(uri); w.lru.delete(uri); continue; }
+      if (!fs.existsSync(file)) { w.mgr.closeDoc(uri); continue; }
       const text = fs.readFileSync(file, 'utf8');
       const d = w.mgr.docs.get(uri);
       if (d && d.text !== text) w.mgr.changeDoc(uri, d.version + 1, [{ text }]);

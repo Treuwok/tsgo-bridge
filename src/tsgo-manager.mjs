@@ -2,10 +2,12 @@
 //  - lazy start, idle stop, transparent restart with replay of open documents
 //  - crash handling: read-only requests are retried once on a fresh server, others fail fast
 //  - answers server->client requests itself (registerCapability, configuration, refresh, progress)
+//  - working set: documents of workspaces unused for workspaceIdleMs are parked (see #parkIdle)
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { readLsp, frameLsp, isRequest, isResponse } from './jsonrpc.mjs';
 import { applyContentChanges } from './text.mjs';
+import { workspaceOf } from './workspace.mjs';
 
 export const RETRYABLE = new Set([
   'textDocument/hover', 'textDocument/definition', 'textDocument/typeDefinition', 'textDocument/declaration',
@@ -15,25 +17,38 @@ export const RETRYABLE = new Set([
   'textDocument/selectionRange', 'textDocument/semanticTokens/full', 'textDocument/inlayHint', 'textDocument/codeLens',
 ]);
 
+/** Document a request is about: `textDocument.uri`, or `item.uri` for callHierarchy/incomingCalls|outgoingCalls. */
+export const docUri = params => params?.textDocument?.uri ?? params?.item?.uri;
+
+/** Throwaway document: opening it makes tsgo remove projects that have no open document (see #checkIdle). */
+const RELEASE_URI = 'untitled:tsgo-bridge-release';
+
 export class TsgoManager extends EventEmitter {
   /**
    * @param {object} o
    * @param {() => {command:string,args:string[]}} o.resolveCommand  resolved lazily on (re)start
    * @param {object} o.initParams     initialize params to send (already adapted by the frontend)
    * @param {number} [o.idleMs]       0 disables idle stop
+   * @param {number} [o.workspaceIdleMs] park the documents of a workspace (git root) that was not used for this
+   *                                   long; they come back when used (0 = never)
+   * @param {number} [o.maxDocs]      most open documents; older ones are closed and forgotten (0 = no limit)
    * @param {Function} [o.log]
    * @param {object} [o.env]
    */
-  constructor({ resolveCommand, initParams, idleMs = 600_000, log = () => {}, env = process.env }) {
+  constructor({ resolveCommand, initParams, idleMs = 600_000, workspaceIdleMs = 0, maxDocs = 0, log = () => {}, env = process.env }) {
     super();
     this.resolveCommand = resolveCommand;
     this.initParams = initParams;
     this.idleMs = idleMs;
+    this.workspaceIdleMs = workspaceIdleMs;
+    this.maxDocs = maxDocs > 0 ? maxDocs : Infinity;
     this.log = log;
     this.env = env;
     this.state = 'idle'; // idle | starting | ready | stopping | closed
     this.proc = null;
-    this.docs = new Map(); // uri -> { languageId, version, text }
+    this.docs = new Map(); // uri -> { languageId, version, text, workspace }; order: least -> most recently used
+    this.parked = new Map(); // same shape: closed in tsgo because their workspace is idle, still open for the client
+    this.lastUse = new Map(); // workspace -> time it was last used (opened, edited or queried)
     this.pending = new Map(); // server request id -> { method, params, resolve, retryable, retried }
     this.queue = []; // { kind:'request'|'notify', ... } waiting for ready
     this.seq = 0;
@@ -41,8 +56,9 @@ export class TsgoManager extends EventEmitter {
     this.initResult = null;
     this.lastActivity = Date.now();
     this.readyWaiters = [];
-    if (idleMs > 0) {
-      this.idleTimer = setInterval(() => this.#checkIdle(), Math.max(200, Math.min(idleMs / 4, 30_000)));
+    const tick = Math.min(...[idleMs, workspaceIdleMs].filter(ms => ms > 0));
+    if (Number.isFinite(tick)) {
+      this.idleTimer = setInterval(() => this.#checkIdle(), Math.max(200, Math.min(tick / 4, 30_000)));
       this.idleTimer.unref();
     }
   }
@@ -63,6 +79,9 @@ export class TsgoManager extends EventEmitter {
   /** Send a request; resolves with the raw response message ({result} or {error}). Never rejects. */
   request(method, params, { retryable = RETRYABLE.has(method), onSent } = {}) {
     this.touch();
+    if (this.state === 'closed') return Promise.resolve({ error: { code: -32800, message: 'closed' } });
+    const uri = docUri(params);
+    if (uri) this.#revive(uri); // a request on a parked document must not reload its project behind the limit
     return new Promise(resolve => {
       const item = { method, params, resolve, retryable, retried: false, onSent };
       if (this.state === 'ready') this.#sendRequest(item);
@@ -81,13 +100,28 @@ export class TsgoManager extends EventEmitter {
 
   openDoc(uri, languageId, version, text) {
     this.touch();
-    this.docs.set(uri, { languageId, version, text });
-    if (this.state === 'ready') this.#write({ jsonrpc: '2.0', method: 'textDocument/didOpen', params: { textDocument: { uri, languageId, version, text } } });
-    else this.#ensureStarted();
+    const workspace = workspaceOf(uri);
+    this.parked.delete(uri);
+    this.docs.delete(uri);
+    this.#activate(workspace, 1);
+    this.#open(uri, { languageId, version, text, workspace });
+  }
+
+  /** Open for the client: open in tsgo, or parked by the working-set limit. */
+  isOpen(uri) { return this.docs.has(uri) || this.parked.has(uri); }
+
+  /** Mark an open document (and its workspace) as used now; the frontend decides what counts as use. */
+  markUsed(uri) {
+    const d = this.docs.get(uri);
+    if (!d) return;
+    this.docs.delete(uri);
+    this.docs.set(uri, d);
+    this.lastUse.set(d.workspace, Date.now());
   }
 
   changeDoc(uri, version, contentChanges) {
     this.touch();
+    this.#revive(uri);
     const d = this.docs.get(uri);
     if (!d) return false;
     d.text = applyContentChanges(d.text, contentChanges);
@@ -105,8 +139,7 @@ export class TsgoManager extends EventEmitter {
 
   closeDoc(uri) {
     this.touch();
-    if (!this.docs.delete(uri)) return;
-    if (this.state === 'ready') this.#write({ jsonrpc: '2.0', method: 'textDocument/didClose', params: { textDocument: { uri } } });
+    this.#close(uri);
   }
 
   /** Pull diagnostics for an open document. Returns items[] or null. */
@@ -130,6 +163,57 @@ export class TsgoManager extends EventEmitter {
   }
 
   // ---------------- internals ----------------
+  /**
+   * `workspace` is used now, for `incoming` new documents: keep at most maxDocs documents, and re-open the parked
+   * documents of `workspace` (the client still has them open; cross-file diagnostics and references need them).
+   */
+  #activate(workspace, incoming = 0) {
+    this.lastUse.set(workspace, Date.now());
+    const back = [...this.parked].filter(([, d]) => d.workspace === workspace);
+    let kept = incoming + back.length;
+    const close = [];
+    for (const [uri] of [...this.docs].reverse()) if (kept < this.maxDocs) kept++; else close.push(uri); // newest first
+    if (close.length) this.log('closing', close.length, 'least recently used docs');
+    for (const uri of close) this.#close(uri);
+    for (const [uri, d] of back) { this.parked.delete(uri); this.#open(uri, d); }
+    if (back.length) this.emit('reopen', back.map(([uri]) => uri));
+  }
+
+  /**
+   * Park the documents of every workspace not used for workspaceIdleMs; returns how many. Claude Code never sends
+   * didClose, and tsgo keeps every project that has an open document, so without this every git worktree an agent ever
+   * edited stays loaded (more than 1 GB each for a large app). Workspaces in use are never parked: a count limit made
+   * concurrently used worktrees evict each other and reload on every edit (measured). Parked documents keep their text.
+   */
+  #parkIdle() {
+    if (!(this.workspaceIdleMs > 0)) return 0;
+    const cutoff = Date.now() - this.workspaceIdleMs;
+    const idle = [...this.docs].filter(([, d]) => (this.lastUse.get(d.workspace) ?? 0) < cutoff);
+    if (!idle.length) return 0;
+    this.log('parking', idle.length, 'docs of idle workspaces', [...new Set(idle.map(([, d]) => d.workspace))]);
+    for (const [uri, d] of idle) { this.#close(uri); this.parked.set(uri, d); }
+    return idle.length;
+  }
+
+  /** A parked document is used again: bring its workspace back. */
+  #revive(uri) {
+    const p = this.parked.get(uri);
+    if (p) this.#activate(p.workspace);
+  }
+
+  /** Close without recording activity: the bridge closing documents itself must not postpone the idle stop. */
+  #close(uri) {
+    this.parked.delete(uri);
+    if (!this.docs.delete(uri)) return;
+    if (this.state === 'ready') this.#write({ jsonrpc: '2.0', method: 'textDocument/didClose', params: { textDocument: { uri } } });
+  }
+
+  #open(uri, d) {
+    this.docs.set(uri, d);
+    if (this.state === 'ready') this.#write({ jsonrpc: '2.0', method: 'textDocument/didOpen', params: { textDocument: { uri, languageId: d.languageId, version: d.version, text: d.text } } });
+    else this.#ensureStarted();
+  }
+
   #write(msg) { try { this.proc.stdin.write(frameLsp(msg)); } catch (e) { this.log('write failed', e.message); } }
 
   #sendRequest(item) {
@@ -140,7 +224,10 @@ export class TsgoManager extends EventEmitter {
     item.onSent?.(id);
   }
 
-  #ensureStarted() { if (this.state === 'idle') this.#start(); }
+  #ensureStarted() {
+    if (this.state === 'idle') this.#start();
+    else if (this.state === 'stopping') this.startAfterStop = true; // a document changed while the server was stopping
+  }
 
   #start() {
     this.state = 'starting';
@@ -224,11 +311,19 @@ export class TsgoManager extends EventEmitter {
     if (this.state === 'closed') return;
     if (retry.length) this.queue.unshift(...retry.map(item => ({ kind: 'request', item })));
     // work that arrived while stopping (or retries) needs a fresh server
-    if (this.queue.length || this.readyWaiters.length) this.#ensureStarted();
+    const wanted = this.startAfterStop;
+    this.startAfterStop = false;
+    if (this.queue.length || this.readyWaiters.length || wanted) this.#ensureStarted();
   }
 
   #checkIdle() {
-    if (this.state !== 'ready' || this.pending.size > 0) return;
+    // tsgo removes projects without open documents only while it handles a didOpen, so a throwaway didOpen follows
+    // (verified: it leaves the projects that still have open documents alone); caches are freed after 30 s quiet.
+    if (this.state === 'ready' && this.#parkIdle() > 0) {
+      this.#write({ jsonrpc: '2.0', method: 'textDocument/didOpen', params: { textDocument: { uri: RELEASE_URI, languageId: 'typescript', version: 1, text: '' } } });
+      this.#write({ jsonrpc: '2.0', method: 'textDocument/didClose', params: { textDocument: { uri: RELEASE_URI } } });
+    }
+    if (!(this.idleMs > 0) || this.state !== 'ready' || this.pending.size > 0) return; // idleMs 0: never stop
     if (Date.now() - this.lastActivity < this.idleMs) return;
     this.log('idle for', Date.now() - this.lastActivity, 'ms; stopping server');
     this.state = 'stopping';
