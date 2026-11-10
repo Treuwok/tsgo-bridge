@@ -1,6 +1,6 @@
 {
   "name": "tsgo-bridge",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "TypeScript 7 (tsgo) code intelligence for Claude Code (LSP plugin) and Codex (MCP server + skill), with idle stop and pull-to-push diagnostics.",
   "type": "module",
   "private": true,
@@ -21,7 +21,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test --test-concurrency=1 test/unit.test.mjs test/lsp.test.mjs test/mcp.test.mjs",
+    "test": "node --test --test-concurrency=1 test/unit.test.mjs test/lsp.test.mjs test/mcp.test.mjs test/working-set.test.mjs",
     "doctor": "node bin/tsgo-bridge.mjs doctor"
   },
   "tsgoBridge": {

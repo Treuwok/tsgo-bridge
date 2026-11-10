@@ -2,9 +2,12 @@
 //  - initialize: advertise pull diagnostics to tsgo, hide diagnosticProvider from the client
 //  - client `initialized` is swallowed (the manager sends its own on every (re)start; two of them panic tsgo)
 //  - pull -> push: after open/change/save, pull diagnostics and publish them (deduplicated)
+//  - at most one diagnostics pull per document at a time (each pull pins a tsgo snapshot until it is answered)
+//  - a git root whose files were not edited or queried for TSGO_IDLE_MS is closed in tsgo (Claude Code never sends
+//    didClose); its files come back when used
 //  - client request ids are mapped to manager requests; $/cancelRequest is translated
 import { readLsp, frameLsp, isRequest, isNotification } from './jsonrpc.mjs';
-import { TsgoManager } from './tsgo-manager.mjs';
+import { TsgoManager, docUri } from './tsgo-manager.mjs';
 import { resolveTsgo } from './resolve-tsgo.mjs';
 import { createLogger } from './log.mjs';
 
@@ -21,6 +24,8 @@ export function runLspProxy({ stdin = process.stdin, stdout = process.stdout, en
   const published = new Map(); // uri -> JSON of last published diagnostics
   const dirty = new Set();
   let timer = null;
+  const pulling = new Set(); // documents with a diagnostics pull in flight
+  const again = new Set(); // documents to pull again when their pull in flight is answered
 
   function schedule(uris) {
     if (!pullToPush || !mgr) return;
@@ -30,15 +35,21 @@ export function runLspProxy({ stdin = process.stdin, stdout = process.stdout, en
   }
   function flushDiagnostics() {
     // touched documents first, then every other open document (cross-file errors)
-    const order = [...dirty, ...[...mgr.docs.keys()].filter(u => !dirty.has(u))];
+    const order = [...new Set([...dirty, ...mgr.docs.keys()])];
     dirty.clear();
-    for (const uri of order) {
-      if (!mgr.docs.has(uri)) continue;
-      mgr.pullDiagnostics(uri).then(items => {
-        if (items === null || !mgr.docs.has(uri)) return;
-        publish(uri, items);
-      });
-    }
+    for (const uri of order) pull(uri);
+  }
+  function pull(uri) {
+    if (!mgr.docs.has(uri)) return;
+    // One pull per document: overlapping pulls of fast edits each pinned their own tsgo snapshot (2026-11-10: 49 GB).
+    if (pulling.has(uri)) { again.add(uri); return; }
+    pulling.add(uri);
+    mgr.pullDiagnostics(uri).then(items => {
+      if (items !== null && mgr.isOpen(uri)) publish(uri, items); // parked meanwhile: still open for the client
+    }).finally(() => {
+      pulling.delete(uri);
+      if (again.delete(uri)) pull(uri);
+    });
   }
   function publish(uri, diagnostics) {
     const key = JSON.stringify(diagnostics);
@@ -55,13 +66,14 @@ export function runLspProxy({ stdin = process.stdin, stdout = process.stdout, en
     }
     // never advertise client-side file watching: tsgo then watches the file system itself (verified)
     if (initParams.capabilities?.workspace?.didChangeWatchedFiles) initParams.capabilities.workspace.didChangeWatchedFiles.dynamicRegistration = false;
-    const m = new TsgoManager({ resolveCommand: () => resolveTsgo({ log }), initParams, idleMs, log, env });
+    const m = new TsgoManager({ resolveCommand: () => resolveTsgo({ log }), initParams, idleMs, workspaceIdleMs: idleMs, log, env });
     m.on('notification', msg => {
       if (msg.method === 'textDocument/publishDiagnostics') { publish(msg.params.uri, msg.params.diagnostics); return; }
       if (msg.method === '$/progress' || msg.method === '$/typescriptVersion') return;
       send(msg);
     });
     m.on('ready', ({ restart }) => { if (restart) schedule([]); });
+    m.on('reopen', uris => schedule(uris)); // a parked workspace is back
     m.on('refresh', () => schedule([]));
     m.on('idle-stop', () => log('idle stop'));
     return m;
@@ -84,10 +96,12 @@ export function runLspProxy({ stdin = process.stdin, stdout = process.stdout, en
     if (!mgr) { send({ jsonrpc: '2.0', id, error: { code: -32002, message: 'Server not initialized' } }); return; }
     if (method === 'shutdown') {
       shuttingDown = true;
+      clearTimeout(timer);
       await mgr.close();
       send({ jsonrpc: '2.0', id, result: null });
       return;
     }
+    if (docUri(params)) mgr.markUsed(docUri(params));
     // the manager id is assigned when the request is actually sent (immediately, or after a (re)start)
     const resp = await mgr.request(method, params, { onSent: sid => clientToServer.set(id, sid) });
     clientToServer.delete(id);
@@ -101,7 +115,12 @@ export function runLspProxy({ stdin = process.stdin, stdout = process.stdout, en
       case 'exit': finish(0); return;
       case '$/cancelRequest': { const sid = clientToServer.get(params?.id); if (sid && mgr) mgr.cancel(sid); return; }
       case 'textDocument/didOpen': { const t = params.textDocument; mgr?.openDoc(t.uri, t.languageId, t.version, t.text); schedule([t.uri]); return; }
-      case 'textDocument/didChange': { const t = params.textDocument; mgr?.changeDoc(t.uri, t.version, params.contentChanges); schedule([t.uri]); return; }
+      case 'textDocument/didChange': {
+        const t = params.textDocument;
+        if (mgr?.changeDoc(t.uri, t.version, params.contentChanges)) mgr.markUsed(t.uri); // re-opens a parked document
+        schedule([t.uri]);
+        return;
+      }
       case 'textDocument/didSave': { mgr?.saveDoc(params.textDocument.uri, params.text); schedule([params.textDocument.uri]); return; }
       case 'textDocument/didClose': { mgr?.closeDoc(params.textDocument.uri); published.delete(params.textDocument.uri); return; }
       default: mgr?.notify(method, params);
