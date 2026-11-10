@@ -45,7 +45,7 @@ export function runLspProxy({ stdin = process.stdin, stdout = process.stdout, en
     if (pulling.has(uri)) { again.add(uri); return; }
     pulling.add(uri);
     mgr.pullDiagnostics(uri).then(items => {
-      if (items !== null && mgr.isOpen(uri)) publish(uri, items); // parked meanwhile: still open for the client
+      if (items !== null && mgr.docs.has(uri)) publish(uri, items);
     }).finally(() => {
       pulling.delete(uri);
       if (again.delete(uri)) pull(uri);
